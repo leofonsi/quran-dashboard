@@ -10,6 +10,14 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
+
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib import colors
+from reportlab.platypus import Table, TableStyle
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.lib.utils import ImageReader
 try:
     import arabic_reshaper
     from bidi.algorithm import get_display
@@ -266,6 +274,79 @@ def report_redirect():
     return RedirectResponse(url="/report/pdf", status_code=303)
 
 
+def get_arabic_font_path():
+    """Find an Arabic-capable system font without shipping font files."""
+    candidates = [
+        BASE_DIR / "static" / "fonts" / "Cairo-Regular.ttf",
+        Path("C:/Windows/Fonts/arial.ttf"),
+        Path("C:/Windows/Fonts/tahoma.ttf"),
+        Path("C:/Windows/Fonts/seguiemj.ttf"),
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+        Path("/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf"),
+        Path("/usr/share/fonts/opentype/noto/NotoNaskhArabic-Regular.ttf"),
+        Path("/System/Library/Fonts/Supplemental/Arial.ttf"),
+    ]
+    for path in candidates:
+        if path.exists():
+            return str(path)
+    # Matplotlib ships DejaVuSans; use it as final fallback.
+    try:
+        import matplotlib.font_manager as fm
+        return fm.findfont("DejaVu Sans")
+    except Exception:
+        return None
+
+
+def register_arabic_pdf_font():
+    font_path = get_arabic_font_path()
+    if font_path:
+        try:
+            pdfmetrics.registerFont(TTFont("ArabicFont", font_path))
+            return "ArabicFont"
+        except Exception:
+            pass
+    return "Helvetica"
+
+
+def rtl_text(text):
+    """Convert Arabic text to a visual RTL form for PDF canvas/table rendering."""
+    text = "" if text is None else str(text)
+    if arabic_reshaper and get_display:
+        return get_display(arabic_reshaper.reshape(text))
+    return text
+
+
+def draw_rtl(c, text, x, y, size=11, font="ArabicFont", color=colors.HexColor("#0f172a"), align="right"):
+    c.setFillColor(color)
+    c.setFont(font, size)
+    shaped = rtl_text(text)
+    if align == "center":
+        c.drawCentredString(x, y, shaped)
+    elif align == "left":
+        c.drawString(x, y, shaped)
+    else:
+        c.drawRightString(x, y, shaped)
+
+
+def make_chart_image(labels, values, kind="bar"):
+    """Create a chart image with student codes only to avoid privacy issues and Arabic rendering problems."""
+    img = io.BytesIO()
+    fig, ax = plt.subplots(figsize=(9.5, 4.6))
+    if kind == "line":
+        ax.plot(labels, values, marker="o", linewidth=2)
+    else:
+        ax.bar(labels, values)
+    ax.grid(axis="y" if kind == "bar" else "both", alpha=0.25)
+    ax.tick_params(axis="x", rotation=25)
+    ax.set_xlabel("رمز الطالب")
+    ax.set_ylabel("النقطة/الصفحات")
+    fig.tight_layout()
+    fig.savefig(img, format="png", dpi=160, bbox_inches="tight")
+    plt.close(fig)
+    img.seek(0)
+    return img
+
+
 @app.get("/report/pdf")
 def report_pdf():
     conn = db_conn()
@@ -275,7 +356,8 @@ def report_pdf():
             (SELECT COUNT(*) FROM evaluations) AS total_evals,
             ROUND(COALESCE(AVG(note), 0), 2) AS avg_note,
             ROUND(COALESCE(SUM(pages), 0), 2) AS total_pages,
-            COALESCE(SUM(mistakes), 0) AS total_mistakes
+            COALESCE(SUM(mistakes), 0) AS total_mistakes,
+            ROUND(CASE WHEN COUNT(*) = 0 THEN 0 ELSE SUM(CASE WHEN attendance IN ('حاضر','Present') THEN 1 ELSE 0 END) * 100.0 / COUNT(*) END, 2) AS attendance_rate
         FROM evaluations
     """).fetchone()
     progress = conn.execute("""
@@ -299,94 +381,131 @@ def report_pdf():
     conn.close()
 
     buffer = io.BytesIO()
-    plt.rcParams["font.family"] = "DejaVu Sans"
-    with PdfPages(buffer) as pdf:
-        # صفحة الغلاف والملخص
-        fig = plt.figure(figsize=(8.27, 11.69))
-        fig.patch.set_facecolor("#f6fbf8")
-        ax = fig.add_axes([0, 0, 1, 1])
-        ax.axis("off")
-        ax.add_patch(plt.Rectangle((0.06, 0.06), 0.88, 0.88, fill=False, linewidth=2, edgecolor="#0f766e"))
-        ax.add_patch(plt.Rectangle((0.06, 0.86), 0.88, 0.08, color="#0f766e"))
-        fig.text(0.5, 0.895, ar("تقرير متابعة حفظ القرآن الكريم"), ha="center", va="center", fontsize=22, color="white", weight="bold")
-        fig.text(0.5, 0.835, ar(f"تاريخ التقرير: {date.today()}"), ha="center", fontsize=12, color="#334155")
-        fig.text(0.5, 0.79, ar("ملخص عام للأداء والحضور والحفظ"), ha="center", fontsize=14, color="#0f766e", weight="bold")
+    font_name = register_arabic_pdf_font()
+    width, height = A4
+    c = canvas.Canvas(buffer, pagesize=A4)
+    green = colors.HexColor("#0f766e")
+    dark = colors.HexColor("#0f172a")
+    light = colors.HexColor("#f6fbf8")
+    border = colors.HexColor("#dbe7e2")
 
-        cards = [
-            ("عدد الطلاب", summary["total_students"]),
-            ("عدد التقييمات", summary["total_evals"]),
-            ("المعدل العام", summary["avg_note"]),
-            ("مجموع الصفحات", summary["total_pages"]),
-            ("مجموع الأخطاء", summary["total_mistakes"]),
-        ]
-        y = 0.69
-        for label, value in cards:
-            ax.add_patch(plt.Rectangle((0.18, y-0.025), 0.64, 0.045, color="white", ec="#dbe7e2"))
-            fig.text(0.70, y, ar(label), fontsize=13, weight="bold", ha="right", color="#0f172a")
-            fig.text(0.30, y, ar(value), fontsize=13, ha="right", color="#0f766e", weight="bold")
-            y -= 0.065
+    def footer(page_no):
+        c.setStrokeColor(border)
+        c.line(40, 35, width - 40, 35)
+        draw_rtl(c, f"الصفحة {page_no}", width / 2, 20, 9, font_name, colors.HexColor("#64748b"), "center")
 
-        fig.text(0.5, 0.34, ar("ملاحظة الخصوصية"), ha="center", fontsize=14, weight="bold", color="#0f766e")
-        fig.text(0.5, 0.30, ar("هذا التقرير يتضمن الأسماء الكاملة بغرض التسليم الفردي أو المتابعة الإدارية."), ha="center", fontsize=11, color="#334155")
-        pdf.savefig(fig, bbox_inches="tight")
-        plt.close(fig)
+    # Page 1: cover and summary
+    c.setFillColor(light)
+    c.rect(0, 0, width, height, stroke=0, fill=1)
+    c.setStrokeColor(green)
+    c.setLineWidth(2)
+    c.rect(45, 55, width - 90, height - 110, stroke=1, fill=0)
+    c.setFillColor(green)
+    c.rect(45, height - 120, width - 90, 55, stroke=0, fill=1)
+    draw_rtl(c, "تقرير متابعة حفظ القرآن الكريم", width / 2, height - 100, 20, font_name, colors.white, "center")
+    draw_rtl(c, f"تاريخ التقرير: {date.today()}", width / 2, height - 155, 12, font_name, colors.HexColor("#334155"), "center")
+    draw_rtl(c, "ملخص عام للأداء والحضور والحفظ", width / 2, height - 205, 15, font_name, green, "center")
 
-        # جدول تفصيلي بأسماء الطلاب
-        fig = plt.figure(figsize=(11.69, 8.27))
-        fig.text(0.5, 0.94, ar("جدول ملخص الطلاب"), ha="center", fontsize=18, weight="bold")
-        ax_table = fig.add_axes([0.04, 0.08, 0.92, 0.78])
-        ax_table.axis("off")
-        headers = [ar(x) for x in ["الرمز", "الاسم الكامل", "عدد التقييمات", "الصفحات", "الأخطاء", "المعدل"]]
-        rows = [[ar(r["student_code"]), ar(r["full_name"]), ar(r["total_evals"]), ar(r["pages"]), ar(r["mistakes"]), ar(r["avg_note"])] for r in progress]
-        if rows:
-            table = ax_table.table(cellText=rows, colLabels=headers, loc="center", cellLoc="center")
-            table.auto_set_font_size(False)
-            table.set_fontsize(9)
-            table.scale(1, 1.45)
-        else:
-            ax_table.text(0.5, 0.5, ar("لا توجد بيانات بعد"), ha="center", va="center", fontsize=14)
-        pdf.savefig(fig, bbox_inches="tight")
-        plt.close(fig)
+    cards = [
+        ("عدد الطلاب", summary["total_students"]),
+        ("عدد التقييمات", summary["total_evals"]),
+        ("المعدل العام", summary["avg_note"]),
+        ("نسبة الحضور", f'{summary["attendance_rate"]}%'),
+        ("مجموع الصفحات", summary["total_pages"]),
+        ("مجموع الأخطاء", summary["total_mistakes"]),
+    ]
+    y = height - 270
+    for label, value in cards:
+        c.setFillColor(colors.white)
+        c.setStrokeColor(border)
+        c.roundRect(120, y - 18, width - 240, 40, 6, stroke=1, fill=1)
+        draw_rtl(c, label, width - 165, y - 3, 12, font_name, dark, "right")
+        draw_rtl(c, value, 210, y - 3, 13, font_name, green, "center")
+        y -= 55
 
-        # آخر التقييمات
-        fig = plt.figure(figsize=(11.69, 8.27))
-        fig.text(0.5, 0.94, ar("آخر التقييمات المسجلة"), ha="center", fontsize=18, weight="bold")
-        ax_table = fig.add_axes([0.03, 0.06, 0.94, 0.82])
-        ax_table.axis("off")
-        headers = [ar(x) for x in ["التاريخ", "الاسم", "السورة", "الصفحات", "الأخطاء", "النقطة", "الحضور", "الملاحظة"]]
-        rows = [[ar(r["eval_date"]), ar(r["full_name"]), ar(r["surah"]), ar(r["pages"]), ar(r["mistakes"]), ar(r["note"]), ar(r["attendance"]), ar(r["remark"])] for r in last_evals]
-        if rows:
-            table = ax_table.table(cellText=rows, colLabels=headers, loc="center", cellLoc="center")
-            table.auto_set_font_size(False)
-            table.set_fontsize(8)
-            table.scale(1, 1.35)
-        else:
-            ax_table.text(0.5, 0.5, ar("لا توجد تقييمات بعد"), ha="center", va="center", fontsize=14)
-        pdf.savefig(fig, bbox_inches="tight")
-        plt.close(fig)
+    draw_rtl(c, "ملاحظة الخصوصية", width / 2, 140, 13, font_name, green, "center")
+    draw_rtl(c, "تظهر الرموز فقط في المبيانات، بينما تبقى الأسماء في الجداول الإدارية داخل التقرير.", width / 2, 115, 10, font_name, colors.HexColor("#334155"), "center")
+    footer(1)
+    c.showPage()
 
-        names = [ar(r["full_name"]) for r in progress[:10]]
-        pages = [r["pages"] or 0 for r in progress[:10]]
-        notes = [r["avg_note"] or 0 for r in progress[:10]]
+    # Page 2: students summary table with names
+    c.setFillColor(colors.white)
+    c.rect(0, 0, width, height, stroke=0, fill=1)
+    draw_rtl(c, "جدول ملخص الطلاب", width / 2, height - 55, 17, font_name, green, "center")
+    headers = ["الرمز", "الاسم الكامل", "عدد التقييمات", "الصفحات", "الأخطاء", "المعدل"]
+    rows = [[r["student_code"], r["full_name"], r["total_evals"], r["pages"], r["mistakes"], r["avg_note"]] for r in progress[:28]]
+    table_data = [[rtl_text(x) for x in headers]] + [[rtl_text(x) for x in row] for row in rows]
+    t = Table(table_data, colWidths=[62, 150, 85, 70, 70, 70], repeatRows=1)
+    t.setStyle(TableStyle([
+        ("FONTNAME", (0, 0), (-1, -1), font_name),
+        ("FONTSIZE", (0, 0), (-1, 0), 10),
+        ("FONTSIZE", (0, 1), (-1, -1), 8.5),
+        ("BACKGROUND", (0, 0), (-1, 0), green),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("GRID", (0, 0), (-1, -1), 0.3, border),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8fafc")]),
+    ]))
+    tw, th = t.wrapOn(c, width - 80, height - 120)
+    t.drawOn(c, 40, height - 95 - th)
+    footer(2)
+    c.showPage()
 
-        fig, ax = plt.subplots(figsize=(11.69, 8.27))
-        ax.bar(names, pages)
-        ax.set_title(ar("مجموع الصفحات المحفوظة حسب الطالب"), fontsize=16, weight="bold")
-        ax.set_ylabel(ar("عدد الصفحات"))
-        ax.tick_params(axis="x", rotation=30)
-        ax.grid(axis="y", alpha=0.25)
-        pdf.savefig(fig, bbox_inches="tight")
-        plt.close(fig)
+    # Page 3: latest evaluations table with names
+    c.setFillColor(colors.white)
+    c.rect(0, 0, width, height, stroke=0, fill=1)
+    draw_rtl(c, "آخر التقييمات المسجلة", width / 2, height - 55, 17, font_name, green, "center")
+    headers = ["التاريخ", "الاسم", "السورة", "الصفحات", "الأخطاء", "النقطة", "الحضور", "الملاحظة"]
+    rows = [[r["eval_date"], r["full_name"], r["surah"], r["pages"], r["mistakes"], r["note"], r["attendance"], r["remark"]] for r in last_evals[:22]]
+    table_data = [[rtl_text(x) for x in headers]] + [[rtl_text(x) for x in row] for row in rows]
+    t = Table(table_data, colWidths=[65, 105, 65, 52, 52, 52, 55, 95], repeatRows=1)
+    t.setStyle(TableStyle([
+        ("FONTNAME", (0, 0), (-1, -1), font_name),
+        ("FONTSIZE", (0, 0), (-1, 0), 9),
+        ("FONTSIZE", (0, 1), (-1, -1), 7.5),
+        ("BACKGROUND", (0, 0), (-1, 0), green),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("GRID", (0, 0), (-1, -1), 0.3, border),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8fafc")]),
+    ]))
+    tw, th = t.wrapOn(c, width - 50, height - 120)
+    t.drawOn(c, 25, height - 95 - th)
+    footer(3)
+    c.showPage()
 
-        fig, ax = plt.subplots(figsize=(11.69, 8.27))
-        ax.plot(names, notes, marker="o", linewidth=2)
-        ax.set_title(ar("معدل النقط حسب الطالب"), fontsize=16, weight="bold")
-        ax.set_ylabel(ar("النقطة"))
-        ax.tick_params(axis="x", rotation=30)
-        ax.grid(alpha=0.25)
-        pdf.savefig(fig, bbox_inches="tight")
-        plt.close(fig)
+    codes = [str(r["student_code"]) for r in progress[:10]]
+    pages = [r["pages"] or 0 for r in progress[:10]]
+    notes = [r["avg_note"] or 0 for r in progress[:10]]
 
+    # Page 4: pages chart with codes only
+    c.setPageSize(landscape(A4))
+    lw, lh = landscape(A4)
+    c.setFillColor(colors.white)
+    c.rect(0, 0, lw, lh, stroke=0, fill=1)
+    draw_rtl(c, "مجموع الصفحات المحفوظة حسب رمز الطالب", lw / 2, lh - 45, 17, font_name, green, "center")
+    chart = make_chart_image(codes, pages, kind="bar")
+    c.drawImage(ImageReader(chart), 55, 65, width=lw - 110, height=lh - 135, preserveAspectRatio=True, anchor="c")
+    c.setStrokeColor(border)
+    c.line(40, 35, lw - 40, 35)
+    draw_rtl(c, "الصفحة 4", lw / 2, 20, 9, font_name, colors.HexColor("#64748b"), "center")
+    c.showPage()
+
+    # Page 5: notes chart with codes only
+    c.setPageSize(landscape(A4))
+    c.setFillColor(colors.white)
+    c.rect(0, 0, lw, lh, stroke=0, fill=1)
+    draw_rtl(c, "معدل النقط حسب رمز الطالب", lw / 2, lh - 45, 17, font_name, green, "center")
+    chart = make_chart_image(codes, notes, kind="line")
+    c.drawImage(ImageReader(chart), 55, 65, width=lw - 110, height=lh - 135, preserveAspectRatio=True, anchor="c")
+    c.setStrokeColor(border)
+    c.line(40, 35, lw - 40, 35)
+    draw_rtl(c, "الصفحة 5", lw / 2, 20, 9, font_name, colors.HexColor("#64748b"), "center")
+    c.showPage()
+
+    c.save()
     buffer.seek(0)
     headers = {"Content-Disposition": "attachment; filename=quran_report_professional.pdf"}
     return StreamingResponse(buffer, media_type="application/pdf", headers=headers)

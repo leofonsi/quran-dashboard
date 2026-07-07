@@ -5,3 +5,4 @@ python-multipart
 matplotlib
 arabic-reshaper
 python-bidi
+reportlab
