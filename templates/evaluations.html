@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-header"><h1>التقييمات اليومية</h1><span class="status-pill">تسجيل الحفظ والمراجعة</span></header>
+
+<section class="panel">
+    <h3>إضافة تقييم جديد</h3>
+    <p class="hint">لحماية الخصوصية، يتم اختيار الطالب بالرمز فقط. لا يوجد حد للنقطة: يمكنك إدخال 20 أو 80 أو 100 أو 200 حسب نظامك.</p>
+    <form method="post" action="/evaluations/add" class="form wide">
+        <select name="student_id" required>
+            {% for s in students %}<option value="{{ s.id }}">{{ s.student_code }}</option>{% endfor %}
+        </select>
+        <input name="eval_date" type="date" value="{{ today }}" required>
+        <select name="surah" required>
+            {% for surah in surahs %}<option>{{ surah }}</option>{% endfor %}
+        </select>
+        <input name="ayat_from" placeholder="من الآية">
+        <input name="ayat_to" placeholder="إلى الآية">
+        <input name="pages" type="number" step="0.5" placeholder="عدد الصفحات">
+        <input name="mistakes" type="number" placeholder="عدد الأخطاء">
+        <select name="attendance"><option>حاضر</option><option>غائب</option></select>
+        <select name="revision"><option>نعم</option><option>لا</option></select>
+        <input name="note" type="number" step="0.25" placeholder="النقطة">
+        <input name="remark" placeholder="ملاحظة الأستاذ">
+        <button>حفظ التقييم</button>
+    </form>
+</section>
+
+<section class="panel">
+    <h3>سجل التقييمات</h3>
+    <p class="hint">تظهر رموز الطلاب فقط في هذه الصفحة. الأسماء الكاملة تظهر في PDF فقط.</p>
+    <div class="table-wrap">
+        <table>
+            <thead><tr><th>التاريخ</th><th>رمز الطالب</th><th>السورة</th><th>من</th><th>إلى</th><th>الصفحات</th><th>الأخطاء</th><th>الحضور</th><th>المراجعة</th><th>النقطة</th><th>ملاحظة</th><th>تعديل</th><th>حذف</th></tr></thead>
+            <tbody>
+            {% for e in evaluations %}
+                <tr>
+                    <form method="post" action="/evaluations/edit/{{ e.id }}">
+                        <td><input name="eval_date" type="date" value="{{ e.eval_date }}" required></td>
+                        <td>
+                            <select name="student_id" required>
+                                {% for s in students %}
+                                    <option value="{{ s.id }}" {% if s.id == e.student_id %}selected{% endif %}>{{ s.student_code }}</option>
+                                {% endfor %}
+                            </select>
+                        </td>
+                        <td>
+                            <select name="surah" required>
+                                {% for surah in surahs %}<option {% if surah == e.surah %}selected{% endif %}>{{ surah }}</option>{% endfor %}
+                            </select>
+                        </td>
+                        <td><input name="ayat_from" value="{{ e.ayat_from or '' }}"></td>
+                        <td><input name="ayat_to" value="{{ e.ayat_to or '' }}"></td>
+                        <td><input name="pages" type="number" step="0.5" value="{{ e.pages or 0 }}"></td>
+                        <td><input name="mistakes" type="number" value="{{ e.mistakes or 0 }}"></td>
+                        <td>
+                            <select name="attendance">
+                                <option {% if e.attendance == 'حاضر' %}selected{% endif %}>حاضر</option>
+                                <option {% if e.attendance == 'غائب' %}selected{% endif %}>غائب</option>
+                            </select>
+                        </td>
+                        <td>
+                            <select name="revision">
+                                <option {% if e.revision == 'نعم' %}selected{% endif %}>نعم</option>
+                                <option {% if e.revision == 'لا' %}selected{% endif %}>لا</option>
+                            </select>
+                        </td>
+                        <td><input name="note" type="number" step="0.25" value="{{ e.note or 0 }}"></td>
+                        <td><input name="remark" value="{{ e.remark or '' }}"></td>
+                        <td><button class="edit">حفظ التعديل</button></td>
+                    </form>
+                    <td>
+                        <form method="post" action="/evaluations/delete/{{ e.id }}" onsubmit="return confirm('هل تريد حذف هذا التقييم؟')">
+                            <button class="danger">حذف</button>
+                        </form>
+                    </td>
+                </tr>
+            {% else %}
+                <tr><td colspan="13">لا توجد تقييمات بعد.</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endblock %}

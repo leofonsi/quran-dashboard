@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-header"><h1>إدارة الطلاب</h1><span class="status-pill">الأسماء للإدارة فقط، واللوحة تعرض الرمز</span></header>
+
+<section class="panel">
+    <h3>إضافة طالب جديد</h3>
+    <p class="hint">يمكنك ترك رمز الطالب فارغًا، وسيتم إنشاؤه تلقائيًا مثل QH-001.</p>
+    <form method="post" action="/students/add" class="form">
+        <input name="student_code" placeholder="رمز الطالب مثل QH-001">
+        <input name="full_name" placeholder="الاسم الكامل الحقيقي" required>
+        <input name="age" type="number" placeholder="العمر">
+        <select name="level">
+            <option>مبتدئ</option>
+            <option>متوسط</option>
+            <option>متقدم</option>
+        </select>
+        <input name="phone_guardian" placeholder="هاتف الولي">
+        <button>إضافة الطالب</button>
+    </form>
+</section>
+
+<section class="panel">
+    <h3>قائمة الطلاب</h3>
+    <p class="hint">الاسم الحقيقي يظهر هنا وفي تقرير PDF فقط. أما Dashboard والتقييمات فتعرض رمز الطالب لحماية الخصوصية.</p>
+    <div class="table-wrap">
+        <table>
+            <thead><tr><th>رمز الطالب</th><th>الاسم الكامل الحقيقي</th><th>العمر</th><th>المستوى</th><th>هاتف الولي</th><th>تعديل</th><th>حذف</th></tr></thead>
+            <tbody>
+            {% for s in students %}
+                <tr>
+                    <form method="post" action="/students/edit/{{ s.id }}">
+                        <td><input name="student_code" value="{{ s.student_code or '' }}" required></td>
+                        <td><input name="full_name" value="{{ s.full_name }}" required></td>
+                        <td><input name="age" type="number" value="{{ s.age or 0 }}"></td>
+                        <td>
+                            <select name="level">
+                                <option {% if s.level == 'مبتدئ' %}selected{% endif %}>مبتدئ</option>
+                                <option {% if s.level == 'متوسط' %}selected{% endif %}>متوسط</option>
+                                <option {% if s.level == 'متقدم' %}selected{% endif %}>متقدم</option>
+                            </select>
+                        </td>
+                        <td><input name="phone_guardian" value="{{ s.phone_guardian or '' }}"></td>
+                        <td><button class="edit">حفظ التعديل</button></td>
+                    </form>
+                    <td>
+                        <form method="post" action="/students/delete/{{ s.id }}" onsubmit="return confirm('هل تريد حذف هذا الطالب؟')">
+                            <button class="danger">حذف</button>
+                        </form>
+                    </td>
+                </tr>
+            {% else %}
+                <tr><td colspan="7">لا يوجد طلاب بعد.</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endblock %}

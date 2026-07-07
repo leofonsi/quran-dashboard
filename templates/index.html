@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-header">
+    <div>
+        <h1>لوحة متابعة حفظ القرآن الكريم</h1>
+        <p class="subtitle">متابعة تلقائية للطلاب، الحضور، الأخطاء، الصفحات، والنقط مع حماية خصوصية الطلاب.</p>
+    </div>
+    <span class="status-pill">تحديث تلقائي كل دقيقة</span>
+</header>
+
+<section class="cards">
+    <div class="card"><span>عدد الطلاب</span><strong>{{ total_students }}</strong></div>
+    <div class="card"><span>عدد التقييمات</span><strong>{{ total_evals }}</strong></div>
+    <div class="card"><span>المعدل العام</span><strong>{{ avg_note }}</strong></div>
+    <div class="card"><span>نسبة الحضور</span><strong>{{ attendance_rate }}%</strong></div>
+</section>
+
+<section class="grid">
+    <div class="panel">
+        <h3>تطور الصفحات المحفوظة حسب رمز الطالب</h3>
+        <div id="pagesChart" class="chart"></div>
+    </div>
+    <div class="panel">
+        <h3>معدل النقط حسب رمز الطالب</h3>
+        <div id="notesChart" class="chart"></div>
+    </div>
+</section>
+
+<section class="panel">
+    <h3>أفضل الطلاب حسب الرمز</h3>
+    <div class="table-wrap">
+        <table>
+            <thead><tr><th>رمز الطالب</th><th>المعدل</th><th>مجموع الصفحات</th></tr></thead>
+            <tbody>
+            {% for s in top_students %}
+                <tr><td>{{ s.student_code }}</td><td>{{ s.avg_note }}</td><td>{{ s.total_pages }}</td></tr>
+            {% else %}
+                <tr><td colspan="3">لا توجد بيانات بعد.</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<script>
+const names = {{ student_progress | map(attribute='student_code') | list | tojson }};
+const pages = {{ student_progress | map(attribute='pages') | list | tojson }};
+const notes = {{ student_progress | map(attribute='avg_note') | list | tojson }};
+const plotConfig = {displayModeBar:false, responsive:true};
+Plotly.newPlot('pagesChart', [{x:names, y:pages, type:'bar', text:pages, textposition:'auto'}], {
+    margin:{t:20,r:20,l:40,b:80}, paper_bgcolor:'rgba(0,0,0,0)', plot_bgcolor:'rgba(0,0,0,0)',
+    yaxis:{title:'الصفحات'}, xaxis:{tickangle:-25}, font:{family:'Tahoma, Arial'}
+}, plotConfig);
+Plotly.newPlot('notesChart', [{x:names, y:notes, type:'scatter', mode:'lines+markers'}], {
+    margin:{t:20,r:20,l:40,b:80}, paper_bgcolor:'rgba(0,0,0,0)', plot_bgcolor:'rgba(0,0,0,0)',
+    yaxis:{title:'النقطة'}, xaxis:{tickangle:-25}, font:{family:'Tahoma, Arial'}
+}, plotConfig);
+setInterval(()=>location.reload(), 60000);
+</script>
+{% endblock %}
